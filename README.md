@@ -68,6 +68,7 @@ npm run dev
 | 质量报告 | `quality_report` | 质量报告 | 报告编号、关联资产、检核时间 |
 | 回收清理 | `reclaim_job` | 回收任务 | 任务编号、目标资产、回收范围 |
 | 变更通知 | `change_notice` | 变更通知 | 通知编号、关联资产、变更类型 |
+| 派生归属 | `derived_attribution` | 归属清单 | 派生表、来源字段、目标字段、归属域 |
 
 ## 约定
 
@@ -76,6 +77,49 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+- 跨域派生表的字段责任见 `derived_attribution`：独有字段只有归属域可复核，
+  共享字段必须挂在有效的 `share_grant` 上；同一字段的结论只保留一份生效，
+  覆盖统计按“派生表+字段”去重。
+
+## 派生归属复核
+
+示例派生表 `DWD_TRADE_SETTLE` 由交易域 `ODS_TRADE` 与结算域 `ODS_SETTLE` 派生：
+
+| 字段 | 归属域 | 类型 | 依据 |
+| --- | --- | --- | --- |
+| 交易金额 | 交易域 | 独有 | `LINE-0004` 血缘记录 |
+| 结算码 | 结算域 | 独有 | `LINE-0005` 血缘记录 |
+| 对账金额 | 交易域 | 共享给结算域 | `SHR-0001` 共享授权 |
+| 对账状态 | 结算域 | 共享给交易域 | `SHR-0002` 共享授权 |
+
+主要接口（通用资源路由 `/api/derived_attribution` 仍然可用）：
+
+```text
+GET  /api/attribution/fields?domain=结算域          各域本轮可提交字段范围
+GET  /api/attribution/permission?domain=&table=&field=  单字段复核权限与依据
+POST /api/attribution/reviews                       提交复核候选（domain/submitter）
+POST /api/attribution/reviews/{复核编号}/confirm    确认结论（按最新授权校验）
+POST /api/attribution/grants/{授权编号}/revoke      撤销共享授权
+GET  /api/attribution/trace/{清单id}                追查生效确认与提交痕迹
+GET  /api/attribution/report                        覆盖报告（按字段去重）
+GET  /api/attribution/revalidate                    撤权后复查报告与范围
+```
+
+复核规则：
+
+- 独有字段只有归属域能提交/确认，其他域提交会被拒绝并说明原因；
+- 共享字段必须同时满足“清单标注共享 + 对应 `share_grant` 已生效 + `basis` 非空”，
+  任一条件缺失，该字段不进入任何域的可提交范围；
+- 两个域在同一轮提交同一共享字段时先标记冲突，确认阶段归属域结论优先，
+  共享域先确认的结论转为“参考”，同一字段只保留一份生效结论；
+- 结论写回所用字段、提交人、确认人和授权依据，可按清单编号追查；
+- 撤销共享授权后，待确认候选立即失效，旧候选无法再次确认，新的提交被拒；
+  已确认结论保留为历史记录，复查接口会列出授权已失效的结论并重算本轮范围；
+- 报告分母按“派生表 + 字段”去重，两个域复核同一字段只计一次有效覆盖，
+  同一派生表不会因为跨域共同负责而重复进入全局分母；
+- 撤权后重新统计时，授权已失效的结论不再算有效覆盖（`authorization_lapsed`），
+  但仍保留在报告的 `effective_conclusions` 里，供 `current_authorization_invalid`
+  和复查接口核对历史结论。
 
 领域：数据工程
 子方向：数仓与数据湖

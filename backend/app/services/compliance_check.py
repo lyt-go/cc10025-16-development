@@ -2,6 +2,7 @@
 
 跨模块数据流：
     asset_catalog → compliance_check: 资产变更触发合规扫描
+    derived_attribution → compliance_check: 各域可提交字段范围与复核结论
     compliance_check → audit_log: 检查结果写入审计日志
     compliance_check → quality_report: 合规结果纳入质量报告
 """
@@ -42,20 +43,29 @@ class ComplianceCheckService(BaseModuleService):
         standard = str(entry.get("合规标准", ""))
         scope = str(entry.get("扫描范围", ""))
 
-        # 模拟合规扫描：统计关联的资产模块中的pending和abnormal状态
+        # 模拟合规扫描：每行只统计一次，避免跨域共享的派生表被重复计入。
         checked_count = 0
         violations = 0
+        attributed_domains: set[str] = set()
+        if scope:
+            for attr in store.rows("derived_attribution"):
+                if scope in str(attr.get("归属域", "")) or scope in str(attr.get("派生表", "")):
+                    attributed_domains.add(str(attr.get("归属域", "")))
         for module_name in store.module_names():
             for row in store.rows(module_name):
-                if scope and str(row.get("所属域", "") + str(row.get("关联资产", ""))).find(scope[:3]) >= 0:
-                    checked_count += 1
-                    if row.get("abnormal"):
-                        violations += 1
+                if scope and attributed_domains:
+                    # 指定了扫描范围时，只统计落在该范围派生域内的记录。
+                    domain = str(row.get("所属域", "")) or str(row.get("归属域", ""))
+                    if domain and domain not in attributed_domains:
+                        continue
                 checked_count += 1
                 if row.get("abnormal"):
                     violations += 1
 
         passed = violations == 0
+
+        # 读取派生归属清单：字段级分母按派生表+字段去重，跨域共同负责不重复计入。
+        attribution_report = self.attribution_report(round_id=None)
 
         # 写入合规检查结果
         result = {
@@ -66,6 +76,9 @@ class ComplianceCheckService(BaseModuleService):
             "checked_count": checked_count,
             "violations": violations,
             "passed": passed,
+            "attribution_fields": attribution_report["denominator_fields"],
+            "attribution_covered": attribution_report["covered_fields"],
+            "attribution_rate": attribution_report["coverage_rate"],
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }
         self._write_check_result(str(entry.get("规则编号", "")), result)
@@ -88,6 +101,22 @@ class ComplianceCheckService(BaseModuleService):
         if action == "标记生效":
             return self.run_check(entry_id)
         return super().run_action(entry_id, action)
+
+    def field_scope(self, domain: str, table: str | None = None) -> dict[str, Any]:
+        """读取派生归属清单，生成某域可提交的字段范围。"""
+        return self._attribution().build_scope(domain, table)
+
+    def attribution_report(self, table: str | None = None,
+                           round_id: str | None = None) -> dict[str, Any]:
+        """确认覆盖报告：同字段两域复核只计一次，派生表不重复进入全局分母。"""
+        return self._attribution().build_report(table=table, round_id=round_id)
+
+    def _attribution(self):
+        from app.services import service_for
+        service = service_for("derived_attribution")
+        if service is None:  # pragma: no cover - 模块注册表固定包含该服务
+            raise RuntimeError("派生归属服务未注册")
+        return service
 
     def _write_check_result(self, rule_id: str, result: dict[str, Any]) -> None:
         filename = f"compliance_check_{rule_id}.json"

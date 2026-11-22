@@ -29,3 +29,35 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+    # 派生归属复核用到的上下文，其他模块忽略即可。
+    domain: str | None = None
+    submitter: str | None = None
+    fields: list[str] | None = None
+    round_id: str | None = None
+    table: str | None = None
+    field: str | None = None
+    grant_id: str | None = None
+    review_id: str | None = None
+    confirmer: str | None = None
+
+
+class ReviewSubmitPayload(BaseModel):
+    """复核提交：没有通用动作名，字段都可以单独指定。"""
+
+    domain: str
+    submitter: str
+    table: str | None = None
+    field: str | None = None
+    fields: list[str] | None = None
+    round_id: str | None = None
+    remark: str | None = None
+
+
+class ReviewConfirmPayload(BaseModel):
+    confirmer: str | None = None
+    remark: str | None = None
+
+
+class GrantRevokePayload(BaseModel):
+    submitter: str | None = None
+    remark: str | None = None

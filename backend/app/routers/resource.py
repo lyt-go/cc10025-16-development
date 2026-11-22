@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import io
 from typing import Any
 
@@ -94,5 +95,12 @@ def create_entry(module: str, payload: EntryPayload) -> ActionResult:
 @router.post("/{module}/{entry_id}/actions", response_model=ActionResult)
 def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResult:
     service = require_service(module)
-    entry, message = service.run_action(entry_id, payload.action.strip())
+    action = payload.action.strip()
+    parameters = inspect.signature(service.run_action).parameters
+    if "payload" in parameters:
+        context = payload.model_dump(exclude={"action"}, exclude_none=True)
+        context["remark"] = payload.remark
+        entry, message = service.run_action(entry_id, action, context)
+    else:
+        entry, message = service.run_action(entry_id, action)
     return ActionResult(ok=entry is not None, message=message, entry=entry)

@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.seed import SEED_ROWS
+from app.seed_attribution import ATTRIBUTION_SEED_ROWS, LINEAGE_ROWS
 
 
 class Store:
@@ -14,9 +15,15 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        for name, rows in ATTRIBUTION_SEED_ROWS.items():
+            self._tables.setdefault(name, [dict(row) for row in rows])
+        # 派生表的来源血缘记录并入血缘图谱，归属清单的字段依据就落在原始模块里。
+        self._tables["lineage_graph"].extend(dict(row) for row in LINEAGE_ROWS)
 
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        # 下划线开头的是模块内部附属表（如共享授权、复核候选），不参与模块枚举，
+        # 否则概览和合规扫描会把它们当成独立业务模块重复计数。
+        return sorted(name for name in self._tables if not name.startswith("_"))
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
